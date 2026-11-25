@@ -306,12 +306,13 @@ class Message(BaseModel):
         # messages carrying image content even if string serialization is forced.
         preserve_images = vision_enabled and self.contains_image
 
-        if not force_string_serializer and (
-            cache_enabled or vision_enabled or function_calling_enabled
+        if preserve_images or (
+            not force_string_serializer
+            and (cache_enabled or vision_enabled or function_calling_enabled)
         ):
-            message_dict = self._list_serializer(vision_enabled=vision_enabled)
-        elif preserve_images:
-            message_dict = self._list_serializer(vision_enabled=vision_enabled)
+            message_dict = self._list_serializer(
+                cache_enabled=cache_enabled, vision_enabled=vision_enabled
+            )
         else:
             # some providers, like HF and Groq/llama, don't support a list here, but a
             # single string
@@ -350,10 +351,14 @@ class Message(BaseModel):
         # tool call keys are added in to_chat_dict to centralize behavior
         return message_dict
 
-    def _list_serializer(self, *, vision_enabled: bool) -> dict[str, Any]:
+    def _list_serializer(
+        self, *, cache_enabled: bool, vision_enabled: bool
+    ) -> dict[str, Any]:
         content: list[dict[str, Any]] = []
-        role_tool_with_prompt_caching = self.role == "tool" and any(
-            item.cache_prompt for item in self.content
+        role_tool_with_prompt_caching = (
+            cache_enabled
+            and self.role == "tool"
+            and any(item.cache_prompt for item in self.content)
         )
 
         # Add thinking blocks first (for Anthropic extended thinking)
@@ -369,7 +374,12 @@ class Message(BaseModel):
 
         for item in self.content:
             if isinstance(item, TextContent) and not item.text.strip():
-                if self.role != "tool" and item.cache_prompt and content:
+                if (
+                    cache_enabled
+                    and self.role != "tool"
+                    and item.cache_prompt
+                    and content
+                ):
                     # Keep the cached prefix when dropping its trailing blank block.
                     content[-1]["cache_control"] = {"type": "ephemeral"}
                 continue
@@ -383,10 +393,10 @@ class Message(BaseModel):
                     if d.get("type") == "text" and isinstance(text_val, str):
                         d["text"] = self._maybe_truncate_tool_text(text_val)
 
-            # We have to remove cache_prompt for tool content and move it up to the
-            # message level
+            # Discard per-block markers when caching is disabled. For cached tool
+            # messages the marker belongs at message level, not in the content.
             # See discussion here for details: https://github.com/BerriAI/litellm/issues/6422#issuecomment-2438765472
-            if self.role == "tool" and item.cache_prompt:
+            if not cache_enabled or (self.role == "tool" and item.cache_prompt):
                 for d in item_dicts:
                     d.pop("cache_control", None)
 

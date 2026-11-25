@@ -1274,6 +1274,40 @@ def test_llm_force_string_serializer_override():
 
 
 @pytest.mark.parametrize("use_async", [False, True], ids=["sync", "async"])
+async def test_llm_format_disables_markers_with_tool_calling(use_async):
+    llm = LLM(
+        model="anthropic/claude-sonnet-4-20250514",
+        api_key=SecretStr("local-test-key"),
+        usage_id="test-disabled-cache-markers",
+        caching_prompt=False,
+        disable_vision=True,
+        native_tool_calling=True,
+    )
+    assert not llm.is_caching_prompt_active()
+    messages = [
+        Message(
+            role="tool",
+            content=[TextContent(text="tool result", cache_prompt=True)],
+            tool_call_id="call_123",
+            name="test_tool",
+        ),
+    ]
+
+    if use_async:
+        formatted = await llm.aformat_messages_for_llm(messages)
+    else:
+        formatted = llm.format_messages_for_llm(messages)
+    assert formatted == [
+        {
+            "role": "tool",
+            "content": [{"type": "text", "text": "tool result"}],
+            "tool_call_id": "call_123",
+            "name": "test_tool",
+        }
+    ]
+
+
+@pytest.mark.parametrize("use_async", [False, True], ids=["sync", "async"])
 @pytest.mark.parametrize(
     "model,reasoning_content,expected_reasoning",
     [

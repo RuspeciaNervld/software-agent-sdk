@@ -99,6 +99,65 @@ def test_message_tool_role_with_cache_prompt():
     assert "cache_control" not in result["content"][0]
 
 
+@pytest.mark.parametrize(
+    "role,is_blank",
+    [("tool", False), ("user", False), ("user", True)],
+    ids=["tool-marker", "text-marker", "blank-marker"],
+)
+def test_function_calling_list_respects_cache_setting(role, is_blank):
+    from openhands.sdk.llm.message import TextContent
+
+    content = [TextContent(text="result", cache_prompt=not is_blank)]
+    if is_blank:
+        content.append(TextContent(text=" ", cache_prompt=True))
+    tool = {"tool_call_id": "call_123", "name": "test_tool"} if role == "tool" else {}
+    message = Message(
+        role=role,
+        content=content,
+        tool_call_id=tool.get("tool_call_id"),
+        name=tool.get("name"),
+    )
+    options = {**DEFAULT_SERIALIZATION_OPTS, "function_calling_enabled": True}
+
+    disabled = message.to_chat_dict(**options)
+    assert disabled == {
+        "role": role,
+        "content": [{"type": "text", "text": "result"}],
+        **tool,
+    }
+
+    # The first call must not clear the persisted per-block cache hint.
+    enabled = message.to_chat_dict(**{**options, "cache_enabled": True})
+    marker_holder = enabled if role == "tool" else enabled["content"][0]
+    assert marker_holder["cache_control"] == {"type": "ephemeral"}
+    if role == "tool":
+        assert "cache_control" not in enabled["content"][0]
+
+
+@pytest.mark.parametrize("force_string_serializer", [False, True])
+def test_vision_list_respects_disabled_cache(force_string_serializer):
+    from openhands.sdk.llm.message import ImageContent
+
+    urls = ["https://example.invalid/first.png", "https://example.invalid/second.png"]
+    message = Message(
+        role="user", content=[ImageContent(image_urls=urls, cache_prompt=True)]
+    )
+    options = {
+        **DEFAULT_SERIALIZATION_OPTS,
+        "vision_enabled": True,
+        "force_string_serializer": force_string_serializer,
+    }
+
+    result = message.to_chat_dict(**options)
+    assert result == {
+        "role": "user",
+        "content": [{"type": "image_url", "image_url": {"url": url}} for url in urls],
+    }
+    enabled = message.to_chat_dict(**{**options, "cache_enabled": True})
+    assert "cache_control" not in enabled["content"][0]
+    assert enabled["content"][1]["cache_control"] == {"type": "ephemeral"}
+
+
 def test_message_tool_role_with_image_cache_prompt():
     """Test Message with tool role and ImageContent with cache_prompt."""
     from openhands.sdk.llm.message import ImageContent, Message
